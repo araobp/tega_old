@@ -1,0 +1,8 @@
+idb.root1.a.b(id=1).x.0
+idb.root1.a.b(id=1).y.0
+idb.root1.a.b(id=1).z.0
+idb.root1.a.b(id=1).z.1
+idb.root1.a.b(id=1).z.2
+idb.root1.a.b(id=1).z.2:0
+idb.root1.a.b(id=1).z.2:1
+idb.root1.a.b(id=1).z.2:2

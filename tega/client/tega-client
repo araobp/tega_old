@@ -1,0 +1,69 @@
+#!/usr/bin/env python
+#
+#
+# Python client for Tega
+#
+
+import socket
+import struct
+import readline
+from tega_h import *
+
+# Readline-related
+readline.parse_and_bind('tab: complete')
+readline.parse_and_bind('set editing-mode emacs')
+def completer(text, state):
+    options = [i for i in CRUD if i.startswith(text)]
+    if state < len(options):
+        return options[state]
+    else:
+        return None
+readline.set_completer(completer)
+
+pack = struct.pack
+
+# PDU in network byte order
+def pdu(_ver, OPERATIONS, _key, _values): 
+    _k_len = len(_key)
+    _v_len = len(_values)
+    return pack('!HHHH{}s{}s'.format(_k_len, _v_len), _k_len, _ver, OPERATIONS, _v_len , _key, _values)
+
+
+if __name__ == '__main__':
+
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(ADDRESS)
+   
+    print ('TEGA')
+    print ('q to quit')
+
+    ope = key = value = None
+
+    while True:
+
+        cmd = raw_input(">>> ")
+        if cmd == 'q':
+            break
+
+        g = cmdline.match(cmd)
+        if g:
+            if g.lastindex == 5:
+                ope = g.group(4)
+                key = g.group(5)
+                value = ''
+            elif g.lastindex == 3:
+                ope = g.group(1)
+                key = g.group(2)
+                value = g.group(3)
+                
+            ver = 0
+
+            operations = OPERATIONS(crud[ope], SET, VALUES, B_STRING) 
+            request = pdu(ver, operations, key, value)
+            #print request 
+            s.send(request)
+            response = s.recv(4096)
+            print response
+        else:
+            print "Error: illegal command"
+

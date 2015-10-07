@@ -1,0 +1,45 @@
+Here I use a bracket notation, <h1|key|h2>, to represent cuckoo hashing.
+
+h1: FNV-1
+h2: FNV-1a
+
+INSERT operation
+----------------
+$ insert root.a.name Alice
+
+if not get_egg:
+   insert <h1|root|h2>         (root, kv=k, a)
+else:
+   if a in root:
+      
+insert <h1|root.a|h2>       (null, kv=k, name)
+insert <h1|root.a.name|h2>  (null, kv=v, Alice)
+
+$ insert root.a.name Bob 
+
+insert <h1|root|h2>         (root, kv=k, a)
+insert <h1|root.a|h2>       (null, kv=k, name)
+insert <h1|root.a.name|h2>  (null, kv=v, Bob)
+
+
+SELECT operation
+-------------
+$ select root.a.name
+
+read <h1|root|h2>
+if (root, kv=k, a) exits in the row, go on:
+read <h1|root.a|h2>
+if (null, kv=k, name) exists in the row, go on:
+read <h1|root.a.name|h2>
+
+Alice
+
+Delete operation
+----------------
+$ delete root.a.name
+
+delete <h1|root.a.name|h2>
+
+exit 0
+
+

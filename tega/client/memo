@@ -1,0 +1,12 @@
+import re
+pattern = re.compile('^(\w+)$|^(\w+)\s+(/[/\w]+)([:\?])?$')
+m = pattern.match('insert /a/b/c:')
+print m.lastinde  # 4
+print m.group(0)  # insert /a/b/c:
+print m.group(2)  # insert
+print m.group(3)  # /a/b/c
+print m.group(4)  # :
+m = pattern.match('insert')
+print m.lastinde  # 1
+print m.group(0)  # insert
+print m.group(1)  # insert

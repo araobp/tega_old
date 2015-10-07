@@ -1,0 +1,307 @@
+Tega KVS blueprint ver 0.1
+===========================
+
+(this blueprint is still in an eary stage and has not been fixed yet)
+
+Tega KVS is a special-purpose key-value store that is optimized for a file system such as JFFS2: flash-memory-friendly KVS supporting tree structure node.
+
+Background and motivation
+-------------------------
+I have little knowledge about databases, so the main purpose is to study database technologies with SDN.
+
+The project Tega requires KVS supporting the following characteristics pertaining to tree structure data:
+* Tree structure data with multi-generations (node versioning)
+* The size of key data larger than that of its value (sometimes no value)
+* The size of key is relatively large
+* The total size of key and value is relatively small: under 80 bytes on the average.
+* Flash-memory-friendly KVS, optimized for a JFFS2-like file system.
+* Need for a very compact KVS that runs on a small router.
+
+Observation
+-----------
+* OVSDB: good for data with well-defined schemas, not good for schema-less data. My experiment showed that the overhead of uuid and timestamp was significant, and repetitive CRUD operations to a specific row could cause a performance and scalability problem.
+* There are already a number of good KVS implementaionts: memcached, redis, MongoDB... But most of them are optimized for web caching, and not optimized for tree structure data having the characteristics mentioned above.
+
+Strategy
+--------
+* Small overhead per node
+* Key data compression by calculating its hash
+* Support for both "hash(key)-value" and "key-value" datastore
+* KVS optimized for non-big-data: the number of nodes is typically less than 5000.
+* Flash-memory-friendliness
+* Self-describing-tree-node-log-entries
+* Schemaless
+
+Planning the KVS capacity
+-------------------------
+* Max number of nodes: 4095 (default) - 32767 (max) (15bits)
+* Max length of values: 65535 bytes (16bits)
+* Max length of key: 4095 bytes (12bits)
+
+KVS log entry format
+--------------------
+
+Type 0, overhead per entry: 10 bytes
+
+Header(10)                               Values
+---------------------------------------- ----------------------
+ 1  15  1  15  16   2     6    8   16
+[0| h1 |0| h2 |ver|ope|v_type|prev|v_len| value0, value1, ...]\n
+                  :--    16     --:
+                    operations
+
+Type 1, overhead per entry: 8 bytes
+
+Header(8)                                    Key   Values
+-------------------------------------------- ----- -----------------------
+ 1  2    1    12   16   2     6    8   16
+[1|XX|k_type|k_len|ver|ope|v_type|prev|v_len| key |  value0, value1, ...]\n
+                      :--    16     --:
+                        operations
+
+The max length of values = 65535 
+
+k_type
+  0   normal
+  1   stash (cuckoo hashing)
+  
+prev
+  0 ~ 255 (relative position)
+
+ope              before     after
+  00  insert      []       [a, b]
+  01  read
+  10  update      [a, b]   [a, b, c]
+  11  delete      [a, b]   []
+
+v_type (6bits)
+  00     scalar 
+  01     set 
+  10     list
+  11     (unused)
+    0    keys
+    1    values
+     000 boolean (uint8_t, 0:false, 1:true)
+     001 string (csv format) 
+     010 int (int16_t)
+     011 long (int32_t)
+     100 float
+     101 double
+     110 (unused)
+     111 (unused)
+
+
+Note: Tega may work independently from idb.py in case of Type1 and a_type=0 (this is a normal KVS mode).
+
+Sequencial access to the log entries
+------------------------------------
+(Reference) http://en.wikipedia.org/wiki/Cuckoo_hashing
+
+At the start up time, idb scans all the log entries (the first 8 bytes of each entry in case of Type 1) to create a pair of hash tables.
+
+nest_id: 
+  for nests1, h1(key, version) 
+  for nests2, h2(key, version)
+
+             nests1
+   |       +----------+ 
+ nest_id   |          | 0x000
+   |       |          |
+   |       |          |
+   |       |          |
+   V       |[  nest  ]|
+           |          | 0xFFF
+           +----------+
+   
+            nests2
+           +----------+
+   |       |          | 0x000
+   |       |          |
+   |       |          |
+   |       |          |
+   V       |[  nest  ]|
+           |          | 0xFFF
+           +----------+
+
+Overhead per entry: 6 bytes
+
+Each nest can hosts an egg:
+cuckoo: hash(key, version) -- hash used for kicking out another egg 
+pointer: file seek pointer
+
+Egg structure:
+   1     15      16         32      
+[stash|cuckoo| next_ver | offset ]
+
+stash:
+  0   no eggs in a stash  
+  1   eggs in a stash
+
+cuckoo: h1(x) or h2(x)
+
+The number of hash entries:  8192 for 4096 nodes 
+The total size: 6 * 8192 = 49152 bytes (49KB)
+
+
+Stash
+-----
+In some situation, an egg is put into a stash.
+
+Stash head
+    |
+    V
+[length| key | ver | pointer | next_stash ]
+                                    |
+                                    +--[    ]--[    ]--...
+ 
+Good hash functions for cuckoo?
+-------------------------------
+I have found that a pair of FNV-1 and FNV-1a seems to be a good candidate.  
+
+* http://www.isthe.com/chongo/tech/comp/fnv/index.html
+* https://tools.ietf.org/html/draft-eastlake-fnv
+* http://programmers.stackexchange.com/questions/49550/which-hashing-algorithm-is-best-for-uniqueness-and-speed
+
+Random access to the log entries
+--------------------------------
+
+Cuckoo hashing for a pair of (key, version)
+[nests1] [nests2] [stash]                
+        |                        Log file
+        +------------------+     +--------------+
+                           |     |              |
+                   seek(pointer) |              |
+                           |     |              |
+                           |     |              |
+                           V     |[ entry      ]| 
+                                 |              |
+                                 |              |
+                                 +--------------+
+
+
+Bootstrapping
+-------------
+
+Instantiating a current tree
+
+
+current_ver         idb                              tega 
+0                    | fetch('idb', 0)                |
+                     |------------------------------->|
+3                    | (('root1', 3), ('root2', 5)..) |
+                     |<-------------------------------|
+                     |                                |
+                     | fetch('idb.root1', 0)          |
+                     |------------------------------->|
+4                    | (('a', 0), ('b', 4)..)         |
+                     |<-------------------------------|
+                     |                                |
+                     | fetch('idb.root1.b', 0)        |
+                     |------------------------------->|
+6                    | (('x', 0), ('y', 6)..)         |
+                     |<-------------------------------|
+                     |                                |
+
+
+Instantiating a tree of a specific version
+
+current_ver         idb                              tega 
+0                    | fetch('idb', 0)                |
+                     |------------------------------->|
+3                    | (('root1', 4), ('root2', 5)..) |
+                     |<-------------------------------|
+                     |                                |
+                     | fetch('idb.root1', 4)          |
+                     |------------------------------->|
+4                    | (('a', 0), ('b', 4)..)         |
+                     |<-------------------------------|
+                     |                                |
+                     | fetch('idb.root1.b', 4)        |
+                     |------------------------------->|
+6                    | (('x', 0), ('y', 4)..)         |
+                     |<-------------------------------|
+                     |                                |
+
+In-memory DB (idb)
+-----------------
+The idb is a Python program. It communicate with Tega via UNIX domain socket.
+* To construct an initial tree from a log file (sequencial access).
+* To save the lateset version of nodes/vertices in a log file (log entry addition).
+* To obtain a part of the tree nodes/vertices from a log file (random access).
+
+When operation in mode B, Tega constructs tree structure data in memory as well.
+
+Since Python dict consumes a lot of memory, it is not ideal to keep all the data in memory if the data is big. In that case, Tega keeps all the data in memory on behalf of idb.py.
+ 
+
+      idb.py           tega.c
+
+         o               o                 
+        / \             / \  
+       o   o           o   o        +----------+
+      / \             / \   \       |flash     | 
+     o   o           o   o   o      |memory    |
+    / \             / \     / \     +----------+ 
+   o   o           o   o   o   o
+
+
+Tega
+  mode A: no caching, provides only random access services to the log entries.
+  mode B: full caching.
+  mode C: full caching, but release aged-out data, and re-caches the data when necessary.
+
+
+
+Benefits
+--------
+* Compressed keys for each log entries  : 32bit fixed length
+
+idb.network.router.bgp.100.neighbor... ==> h1 and h2 (32bit)
+
+
+API spec
+---------
+
+Python API
+
+add(key, version, value, is_value=False)
+replace(key, version, value, is_value=False)
+remove(key, verision, value, is_value=False)
+fetch(key, version)
+
+
+How to represent qname in tega 
+------------------------------
+
+qname: ['root', 'a', 'b', 1, '2', '{id:1}', 'x']
+key for libkvs: root.a.b.1.'2'.{id:1}.x 
+</pre>
+
+PDU (Protocol Data Unit)
+------------------------
+
+Header(7)                               Key   Values
+--------------------------------------- ----- -----------------------
+ 1  2    1    12   16   2     6    16
+[X|XX|XXXXXX|k_len|ver|ope|v_type|v_len| key |  value0, value1, ...]\n
+
+
+Label
+-----
+
+In a certain mode, Tega generates a fixed-length alias for each node, so that the client can acess the node very fast without descending from the root node to the target node.
+
+            label table 
+ label     +-------------------+
+   |       |                   | 0x000
+   |       |                   |
+   |       |                   |
+   |       |                   |
+   V       |[ h1 | h2 |pointer]| ----------->  [values]
+           |                   | 0xFFF
+           +-------------------+
+
+In an initial implementaiton, "values" is allocated by calling malloc and released by clalling free. 
+
+The allocation mechanisim will be modified later on: chunks and bitmap indexing.
+
